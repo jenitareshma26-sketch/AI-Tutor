@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-main: #fff8e7;
+  --bg-soft: #f4e7cd;
+  --text-main: #2e2e2e;
+  --accent-main: #800000;
+  --accent-soft: #e6cba8;
+  --font-display: "Playfair Display", Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Manrope", sans-serif;
+  color: var(--text-main);
+  background:
+    radial-gradient(circle at 10% 20%, rgba(230, 203, 168, 0.55) 0%, transparent 18%),
+    radial-gradient(circle at 90% 10%, rgba(128, 0, 0, 0.08) 0%, transparent 22%),
+    linear-gradient(180deg, #fffaf0 0%, var(--bg-main) 45%, #f2e5cb 100%);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.page-pattern {
+  background-image:
+    linear-gradient(rgba(128, 0, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(128, 0, 0, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.glass-panel,
+.premium-panel {
+  background: rgba(255, 248, 231, 0.78);
+  backdrop-filter: blur(10px);
+}
+
+::selection {
+  background: rgba(128, 0, 0, 0.16);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f2e6cc;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cfa87c;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #8f4c4c;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}
+
+.speech-wave {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes fadeUp {
+  0% {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes floatY {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.animate-fadeUp {
+  animation: fadeUp 0.7s ease-out both;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.65s ease-out both;
+}
+
+.animate-popIn {
+  animation: popIn 0.65s ease-out both;
+}
+
+.animate-float {
+  animation: floatY 4s ease-in-out infinite;
+}
+
+.anim-delay-1 {
+  animation-delay: 0.1s;
+}
+
+.anim-delay-2 {
+  animation-delay: 0.2s;
+}
+
+.anim-delay-3 {
+  animation-delay: 0.3s;
+}
