@@ -15,3 +15,7 @@ frontend/.env
 # Python cache
 **/__pycache__/
 *.py[cod]
+
+# Railway server
+railway-server/node_modules
+railway-server/dist
