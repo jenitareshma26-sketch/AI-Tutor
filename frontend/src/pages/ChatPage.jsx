@@ -7,15 +7,13 @@ import ChatWindow from "../components/ChatWindow";
 import InputBox from "../components/InputBox";
 import { askTutor } from "../services/api";
 
-const STORAGE_KEY = "tutorix-ai-chats";
-const WELCOME_MESSAGE =
-  "Hi, I am Tutorix AI. Ask me any question, and I will explain it clearly in simple steps with examples.";
+const CHAT_STORAGE_KEY = "tutorix-chat-sessions-v1";
 
 const createConversation = (id, title = "New Chat", messages = []) => ({
   id,
   title,
   preview: "Ask Tutorix AI anything",
-  messages: messages.length ? messages : [{ role: "assistant", content: WELCOME_MESSAGE }],
+  messages,
   updatedAt: Date.now(),
 });
 
@@ -29,11 +27,59 @@ const buildPreview = (text) => {
   return clean.length > 56 ? `${clean.slice(0, 56)}…` : clean;
 };
 
-const cloneChats = (sourceChats) =>
-  sourceChats.map((chat) => ({
-    ...chat,
-    messages: chat.messages.map((message) => ({ ...message })),
-  }));
+const createChatId = () => `chat-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+const cloneChatsById = (sourceChatsById) => {
+  const nextChatsById = {};
+
+  Object.entries(sourceChatsById).forEach(([id, chat]) => {
+    nextChatsById[id] = {
+      ...chat,
+      messages: chat.messages.map((message) => ({ ...message })),
+    };
+  });
+
+  return nextChatsById;
+};
+
+const moveChatToFront = (chatOrder, chatId) => [chatId, ...chatOrder.filter((id) => id !== chatId)];
+
+const loadStoredSessions = () => {
+  if (typeof window === "undefined") {
+    return { chatsById: {}, chatOrder: [] };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    if (!raw) {
+      return { chatsById: {}, chatOrder: [] };
+    }
+
+    const parsed = JSON.parse(raw);
+    const parsedChats = parsed?.chatsById && typeof parsed.chatsById === "object" ? parsed.chatsById : {};
+    const parsedOrder = Array.isArray(parsed?.chatOrder) ? parsed.chatOrder : [];
+
+    const chatsById = {};
+    Object.entries(parsedChats).forEach(([id, chat]) => {
+      if (!chat || typeof chat !== "object") {
+        return;
+      }
+
+      chatsById[id] = createConversation(
+        id,
+        typeof chat.title === "string" ? chat.title : "New Chat",
+        Array.isArray(chat.messages) ? chat.messages : []
+      );
+      chatsById[id].preview = typeof chat.preview === "string" ? chat.preview : "Ask Tutorix AI anything";
+      chatsById[id].updatedAt = Number.isFinite(chat.updatedAt) ? chat.updatedAt : Date.now();
+    });
+
+    const chatOrder = parsedOrder.filter((id) => chatsById[id]);
+    return { chatsById, chatOrder };
+  } catch {
+    return { chatsById: {}, chatOrder: [] };
+  }
+};
 
 const deriveChatMeta = (chat, nextMessages) => {
   const lastMessage = nextMessages.at(-1);
@@ -48,37 +94,10 @@ const deriveChatMeta = (chat, nextMessages) => {
   };
 };
 
-const loadChats = () => {
-  if (typeof window === "undefined") {
-    return [createConversation("default-chat", "Welcome")];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return [createConversation("default-chat", "Welcome")];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((chat, index) => ({
-        id: chat.id || `legacy-chat-${index}`,
-        title: chat.title || "New Chat",
-        preview: chat.preview || (chat.messages?.at(-1)?.content ? buildPreview(chat.messages.at(-1).content) : "Ask Tutorix AI anything"),
-        messages: Array.isArray(chat.messages) && chat.messages.length > 0 ? chat.messages : [{ role: "assistant", content: WELCOME_MESSAGE }],
-        updatedAt: chat.updatedAt || Date.now(),
-      }));
-    }
-  } catch {
-    // fall through to default
-  }
-
-  return [createConversation("default-chat", "Welcome")];
-};
-
 function ChatPage() {
-  const [chats, setChats] = useState(loadChats);
-  const [activeChatId, setActiveChatId] = useState(() => loadChats()[0]?.id || "default-chat");
+  const [chatsById, setChatsById] = useState({});
+  const [chatOrder, setChatOrder] = useState([]);
+  const [activeChatId, setActiveChatId] = useState("");
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -90,21 +109,54 @@ function ChatPage() {
 
   const bottomRef = useRef(null);
   const undoTimeoutRef = useRef(null);
+  const bootstrapDoneRef = useRef(false);
 
   const activeChat = useMemo(
-    () => chats.find((chat) => chat.id === activeChatId) || chats[0],
-    [activeChatId, chats]
+    () => chatsById[activeChatId] || chatsById[chatOrder[0]] || null,
+    [activeChatId, chatsById, chatOrder]
   );
 
   const messages = activeChat?.messages || [];
 
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(chats));
-  }, [chats]);
-
-  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping, activeChatId]);
+
+  useEffect(() => {
+    if (bootstrapDoneRef.current) {
+      return;
+    }
+
+    const stored = loadStoredSessions();
+    const freshChatId = createChatId();
+    const freshChat = createConversation(freshChatId, "New Chat");
+
+    const nextChatsById = {
+      ...stored.chatsById,
+      [freshChatId]: freshChat,
+    };
+
+    const nextOrder = moveChatToFront(stored.chatOrder, freshChatId);
+
+    setChatsById(nextChatsById);
+    setChatOrder(nextOrder);
+    setActiveChatId(freshChatId);
+    bootstrapDoneRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!bootstrapDoneRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        chatsById,
+        chatOrder,
+      })
+    );
+  }, [chatsById, chatOrder]);
 
   useEffect(() => {
     return () => {
@@ -128,15 +180,30 @@ function ChatPage() {
   };
 
   const updateActiveChat = (updater) => {
-    setChats((previousChats) =>
-      previousChats.map((chat) => (chat.id === activeChatId ? updater(chat) : chat))
-    );
+    setChatsById((previousChatsById) => {
+      const currentChat = previousChatsById[activeChatId];
+      if (!currentChat) {
+        return previousChatsById;
+      }
+
+      return {
+        ...previousChatsById,
+        [activeChatId]: updater(currentChat),
+      };
+    });
+
+    setChatOrder((previousOrder) => moveChatToFront(previousOrder, activeChatId));
   };
 
   const handleNewChat = () => {
-    const id = `chat-${Date.now()}`;
+    const id = createChatId();
     const nextChat = createConversation(id, "New Chat");
-    setChats((previousChats) => [nextChat, ...previousChats]);
+
+    setChatsById((previousChatsById) => ({
+      ...previousChatsById,
+      [id]: nextChat,
+    }));
+    setChatOrder((previousOrder) => moveChatToFront(previousOrder, id));
     setActiveChatId(id);
     setDraft("");
     setError("");
@@ -144,7 +211,12 @@ function ChatPage() {
   };
 
   const handleSelectChat = (id) => {
+    if (!chatsById[id]) {
+      return;
+    }
+
     setActiveChatId(id);
+    setChatOrder((previousOrder) => moveChatToFront(previousOrder, id));
     setMobileSidebarOpen(false);
     setDraft("");
     setError("");
@@ -192,7 +264,8 @@ function ChatPage() {
       return;
     }
 
-    setChats(undoState.snapshot.chats);
+    setChatsById(undoState.snapshot.chatsById);
+    setChatOrder(undoState.snapshot.chatOrder);
     setActiveChatId(undoState.snapshot.activeChatId);
     setUndoState(null);
 
@@ -214,7 +287,8 @@ function ChatPage() {
     }
 
     const snapshot = {
-      chats: cloneChats(chats),
+      chatsById: cloneChatsById(chatsById),
+      chatOrder: [...chatOrder],
       activeChatId,
     };
 
@@ -227,7 +301,7 @@ function ChatPage() {
   };
 
   const handleDeleteChat = (chatId) => {
-    const chatToDelete = chats.find((chat) => chat.id === chatId);
+    const chatToDelete = chatsById[chatId];
     if (!chatToDelete) {
       return;
     }
@@ -238,19 +312,27 @@ function ChatPage() {
     }
 
     const snapshot = {
-      chats: cloneChats(chats),
+      chatsById: cloneChatsById(chatsById),
+      chatOrder: [...chatOrder],
       activeChatId,
     };
 
-    const remainingChats = chats.filter((chat) => chat.id !== chatId);
-    if (remainingChats.length === 0) {
-      const resetChat = createConversation(`chat-${Date.now()}`, "Welcome");
-      setChats([resetChat]);
-      setActiveChatId(resetChat.id);
+    const nextChatsById = { ...chatsById };
+    delete nextChatsById[chatId];
+
+    const nextOrder = chatOrder.filter((id) => id !== chatId);
+
+    if (!nextOrder.length) {
+      const resetId = createChatId();
+      const resetChat = createConversation(resetId, "New Chat");
+      setChatsById({ [resetId]: resetChat });
+      setChatOrder([resetId]);
+      setActiveChatId(resetId);
     } else {
-      setChats(remainingChats);
+      setChatsById(nextChatsById);
+      setChatOrder(nextOrder);
       if (chatId === activeChatId) {
-        setActiveChatId(remainingChats[0].id);
+        setActiveChatId(nextOrder[0]);
       }
     }
 
@@ -301,11 +383,14 @@ function ChatPage() {
     }
   };
 
-  const chatSummaries = chats.map((chat) => ({
-    id: chat.id,
-    title: chat.title,
-    preview: chat.preview,
-  }));
+  const chatSummaries = chatOrder
+    .map((id) => chatsById[id])
+    .filter(Boolean)
+    .map((chat) => ({
+      id: chat.id,
+      title: chat.title,
+      preview: chat.preview,
+    }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-gradient-to-br from-[#FFF8E7] via-[#F3E4D7] to-[#EAD7C3] text-[#2E2E2E]">
@@ -371,8 +456,9 @@ function ChatPage() {
               subtitle="Ask anything. Voice input and voice output are available."
             />
 
-            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-black/5">
+            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-black/5 transition-all duration-300">
               <ChatWindow
+                key={activeChatId || "new-chat"}
                 messages={messages}
                 isTyping={isTyping}
                 error={error}
