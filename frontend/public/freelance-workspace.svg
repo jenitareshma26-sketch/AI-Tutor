@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">Workspace Focus</title>
+  <desc id="desc">Stylized workspace illustration.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4A0D14"/>
+      <stop offset="100%" stop-color="#C88A52"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="800" fill="url(#bg)"/>
+  <rect x="140" y="470" width="920" height="50" rx="12" fill="#F7E9D4" opacity="0.9"/>
+  <rect x="210" y="290" width="420" height="220" rx="14" fill="#FFF8E7"/>
+  <rect x="250" y="330" width="340" height="140" rx="8" fill="#1F1F1F"/>
+  <rect x="720" y="250" width="220" height="260" rx="20" fill="#FFF8E7"/>
+  <circle cx="830" cy="210" r="68" fill="#FFF8E7" opacity="0.8"/>
+  <text x="90" y="120" fill="#FFF8E7" font-size="54" font-family="Segoe UI, Arial" font-weight="700">Workspace Focus</text>
+</svg>

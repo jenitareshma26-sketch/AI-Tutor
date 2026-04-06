@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 from routes.chat import router as chat_router
 
@@ -10,9 +11,14 @@ origins = [
     "http://127.0.0.1:5173",
 ]
 
+frontend_origin = os.getenv("FRONTEND_ORIGIN", "").strip()
+if frontend_origin:
+    origins.append(frontend_origin)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
