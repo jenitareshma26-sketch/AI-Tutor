@@ -8,13 +8,18 @@ router = APIRouter()
 
 @router.post("/ask", response_model=AskResponse)
 def ask_tutor(payload: AskRequest) -> AskResponse:
-    question = payload.question.strip()
-    if not question:
+    messages = [
+        {"role": message.role, "content": message.content.strip()}
+        for message in payload.messages
+        if message.content.strip()
+    ]
+
+    if not messages:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
         service = GroqService()
-        answer = service.get_tutor_answer(question)
+        answer = service.get_tutor_answer(messages)
         return AskResponse(answer=answer)
     except ValueError as config_error:
         raise HTTPException(status_code=500, detail=str(config_error)) from config_error

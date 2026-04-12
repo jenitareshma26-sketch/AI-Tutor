@@ -1,377 +1,268 @@
-import { ChevronRight, PanelLeft } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import Header from "../components/Header";
-import Sidebar from "../components/Sidebar";
-import ChatWindow from "../components/ChatWindow";
-import InputBox from "../components/InputBox";
+import { useEffect, useMemo, useState } from "react";
+import ChatArea from "../components/dashboard/ChatArea";
+import ChatInput from "../components/dashboard/ChatInput";
+import Navbar from "../components/dashboard/Navbar";
+import RightPanel from "../components/dashboard/RightPanel";
+import Sidebar from "../components/dashboard/Sidebar";
 import { askTutor } from "../services/api";
 
-const CHAT_STORAGE_KEY = "tutorix-chat-sessions-v1";
+const CHAT_STORAGE_KEY = "tutorix-chat-sessions-v2";
+const THEME_STORAGE_KEY = "tutorix-theme";
+const MAX_CONTEXT_MESSAGES = 15;
 
-const createConversation = (id, title = "New Chat", messages = []) => ({
-  id,
-  title,
-  preview: "Ask Tutorix AI anything",
-  messages,
+const modePromptMap = {
+  "Learn Mode": [
+    "Explain this concept in simple terms",
+    "Give a real-life example",
+    "Summarize key points in bullets",
+  ],
+  "Exam Mode": [
+    "Ask me 5 MCQs",
+    "Create a quick revision sheet",
+    "Give me exam-level short answers",
+  ],
+  "Coding Mode": [
+    "Generate starter code with comments",
+    "Debug this logic step by step",
+    "Teach me this algorithm visually",
+  ],
+  "Freelance Mode": [
+    "Draft a client proposal",
+    "Create portfolio project ideas",
+    "Write a professional gig description",
+  ],
+};
+
+const createId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+const createMessage = (role, content) => ({
+  id: createId("msg"),
+  role,
+  content,
+  timestamp: new Date().toISOString(),
+});
+
+const createChat = () => ({
+  id: createId("chat"),
+  title: "New Chat",
+  messages: [],
+  createdAt: Date.now(),
   updatedAt: Date.now(),
 });
 
+const formatTime = (timestamp) => {
+  if (!timestamp) {
+    return "Now";
+  }
+
+  try {
+    return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "Now";
+  }
+};
+
 const buildTitle = (text) => {
   const clean = text.trim().replace(/\s+/g, " ");
-  return clean.length > 34 ? `${clean.slice(0, 34)}…` : clean;
+  return clean.length > 34 ? `${clean.slice(0, 34)}...` : clean;
 };
 
-const buildPreview = (text) => {
-  const clean = text.trim().replace(/\s+/g, " ");
-  return clean.length > 56 ? `${clean.slice(0, 56)}…` : clean;
-};
-
-const createChatId = () => `chat-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-
-const cloneChatsById = (sourceChatsById) => {
-  const nextChatsById = {};
-
-  Object.entries(sourceChatsById).forEach(([id, chat]) => {
-    nextChatsById[id] = {
-      ...chat,
-      messages: chat.messages.map((message) => ({ ...message })),
-    };
-  });
-
-  return nextChatsById;
-};
-
-const moveChatToFront = (chatOrder, chatId) => [chatId, ...chatOrder.filter((id) => id !== chatId)];
-
-const loadStoredSessions = () => {
+const safeLoadState = () => {
   if (typeof window === "undefined") {
-    return { chatsById: {}, chatOrder: [] };
+    return { chats: [], activeChatId: "" };
   }
 
   try {
     const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
     if (!raw) {
-      return { chatsById: {}, chatOrder: [] };
+      return { chats: [], activeChatId: "" };
     }
 
     const parsed = JSON.parse(raw);
-    const parsedChats = parsed?.chatsById && typeof parsed.chatsById === "object" ? parsed.chatsById : {};
-    const parsedOrder = Array.isArray(parsed?.chatOrder) ? parsed.chatOrder : [];
+    const chats = Array.isArray(parsed?.chats)
+      ? parsed.chats.map((chat) => ({
+          id: chat.id || createId("chat"),
+          title: chat.title || "New Chat",
+          messages: Array.isArray(chat.messages)
+            ? chat.messages.map((message) => ({
+                id: message.id || createId("msg"),
+                role: message.role,
+                content: message.content,
+                timestamp: message.timestamp || new Date().toISOString(),
+              }))
+            : [],
+          createdAt: Number.isFinite(chat.createdAt) ? chat.createdAt : Date.now(),
+          updatedAt: Number.isFinite(chat.updatedAt) ? chat.updatedAt : Date.now(),
+        }))
+      : [];
 
-    const chatsById = {};
-    Object.entries(parsedChats).forEach(([id, chat]) => {
-      if (!chat || typeof chat !== "object") {
-        return;
-      }
-
-      chatsById[id] = createConversation(
-        id,
-        typeof chat.title === "string" ? chat.title : "New Chat",
-        Array.isArray(chat.messages) ? chat.messages : []
-      );
-      chatsById[id].preview = typeof chat.preview === "string" ? chat.preview : "Ask Tutorix AI anything";
-      chatsById[id].updatedAt = Number.isFinite(chat.updatedAt) ? chat.updatedAt : Date.now();
-    });
-
-    const chatOrder = parsedOrder.filter((id) => chatsById[id]);
-    return { chatsById, chatOrder };
+    return {
+      chats,
+      activeChatId: typeof parsed?.activeChatId === "string" ? parsed.activeChatId : "",
+    };
   } catch {
-    return { chatsById: {}, chatOrder: [] };
+    return { chats: [], activeChatId: "" };
   }
 };
 
-const deriveChatMeta = (chat, nextMessages) => {
-  const lastMessage = nextMessages.at(-1);
-  const firstUserMessage = nextMessages.find((message) => message.role === "user");
-
-  return {
-    ...chat,
-    title: firstUserMessage ? buildTitle(firstUserMessage.content) : "New Chat",
-    preview: lastMessage ? buildPreview(lastMessage.content) : "Ask Tutorix AI anything",
-    messages: nextMessages,
-    updatedAt: Date.now(),
-  };
-};
-
 function ChatPage() {
-  const [chatsById, setChatsById] = useState({});
-  const [chatOrder, setChatOrder] = useState([]);
+  const [chats, setChats] = useState([]);
   const [activeChatId, setActiveChatId] = useState("");
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [error, setError] = useState("");
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [mode, setMode] = useState("Learn Mode");
+  const [activeTool, setActiveTool] = useState("");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [undoState, setUndoState] = useState(null);
-
-  const bottomRef = useRef(null);
-  const undoTimeoutRef = useRef(null);
-  const bootstrapDoneRef = useRef(false);
-
-  const activeChat = useMemo(
-    () => chatsById[activeChatId] || chatsById[chatOrder[0]] || null,
-    [activeChatId, chatsById, chatOrder]
-  );
-
-  const messages = activeChat?.messages || [];
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark";
+  });
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping, activeChatId]);
+    const stored = safeLoadState();
 
-  useEffect(() => {
-    if (bootstrapDoneRef.current) {
+    if (stored.chats.length === 0) {
+      const firstChat = createChat();
+      setChats([firstChat]);
+      setActiveChatId(firstChat.id);
       return;
     }
 
-    const stored = loadStoredSessions();
-    const freshChatId = createChatId();
-    const freshChat = createConversation(freshChatId, "New Chat");
-
-    const nextChatsById = {
-      ...stored.chatsById,
-      [freshChatId]: freshChat,
-    };
-
-    const nextOrder = moveChatToFront(stored.chatOrder, freshChatId);
-
-    setChatsById(nextChatsById);
-    setChatOrder(nextOrder);
-    setActiveChatId(freshChatId);
-    bootstrapDoneRef.current = true;
+    setChats(stored.chats);
+    const validActive = stored.chats.find((chat) => chat.id === stored.activeChatId);
+    setActiveChatId(validActive ? validActive.id : stored.chats[0].id);
   }, []);
 
   useEffect(() => {
-    if (!bootstrapDoneRef.current || typeof window === "undefined") {
+    if (typeof window === "undefined" || chats.length === 0) {
       return;
     }
 
     window.localStorage.setItem(
       CHAT_STORAGE_KEY,
       JSON.stringify({
-        chatsById,
-        chatOrder,
+        chats,
+        activeChatId,
       })
     );
-  }, [chatsById, chatOrder]);
+  }, [chats, activeChatId]);
 
   useEffect(() => {
-    return () => {
-      if (undoTimeoutRef.current) {
-        clearTimeout(undoTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const speakText = (text) => {
-    if (!voiceEnabled || typeof window === "undefined" || !window.speechSynthesis) {
+    if (typeof window === "undefined") {
       return;
     }
+    window.localStorage.setItem(THEME_STORAGE_KEY, isDark ? "dark" : "light");
+  }, [isDark]);
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1;
-    utterance.pitch = 1;
-    utterance.lang = "en-US";
-    window.speechSynthesis.speak(utterance);
-  };
+  const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId) || null, [chats, activeChatId]);
+  const messages = activeChat?.messages || [];
 
-  const updateActiveChat = (updater) => {
-    setChatsById((previousChatsById) => {
-      const currentChat = previousChatsById[activeChatId];
-      if (!currentChat) {
-        return previousChatsById;
-      }
-
-      return {
-        ...previousChatsById,
-        [activeChatId]: updater(currentChat),
-      };
-    });
-
-    setChatOrder((previousOrder) => moveChatToFront(previousOrder, activeChatId));
-  };
-
-  const handleNewChat = () => {
-    const id = createChatId();
-    const nextChat = createConversation(id, "New Chat");
-
-    setChatsById((previousChatsById) => ({
-      ...previousChatsById,
-      [id]: nextChat,
-    }));
-    setChatOrder((previousOrder) => moveChatToFront(previousOrder, id));
-    setActiveChatId(id);
+  const createNewChat = () => {
+    const newChat = createChat();
+    setChats((prev) => [newChat, ...prev]);
+    setActiveChatId(newChat.id);
     setDraft("");
     setError("");
     setMobileSidebarOpen(false);
   };
 
-  const handleSelectChat = (id) => {
-    if (!chatsById[id]) {
+  const selectChat = (chatId) => {
+    const exists = chats.some((chat) => chat.id === chatId);
+    if (!exists) {
       return;
     }
-
-    setActiveChatId(id);
-    setChatOrder((previousOrder) => moveChatToFront(previousOrder, id));
-    setMobileSidebarOpen(false);
-    setDraft("");
+    setActiveChatId(chatId);
     setError("");
-  };
-
-  const handleToggleSidebar = () => {
-    const isDesktop =
-      typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
-
-    if (isDesktop) {
-      setSidebarCollapsed((previous) => !previous);
-      return;
-    }
-
-    setMobileSidebarOpen((previous) => !previous);
-  };
-
-  const handleCloseSidebar = () => {
-    const isDesktop =
-      typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
-
-    if (isDesktop) {
-      setSidebarCollapsed(true);
-      return;
-    }
-
     setMobileSidebarOpen(false);
   };
 
-  const setUndoSnapshot = (label, snapshot) => {
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-    }
-
-    setUndoState({ label, snapshot });
-
-    undoTimeoutRef.current = setTimeout(() => {
-      setUndoState(null);
-      undoTimeoutRef.current = null;
-    }, 5000);
+  const updateChatById = (chatId, updater) => {
+    setChats((prev) =>
+      prev.map((chat) => {
+        if (chat.id !== chatId) {
+          return chat;
+        }
+        return updater(chat);
+      })
+    );
   };
 
-  const handleUndo = () => {
-    if (!undoState) {
-      return;
-    }
-
-    setChatsById(undoState.snapshot.chatsById);
-    setChatOrder(undoState.snapshot.chatOrder);
-    setActiveChatId(undoState.snapshot.activeChatId);
-    setUndoState(null);
-
-    if (undoTimeoutRef.current) {
-      clearTimeout(undoTimeoutRef.current);
-      undoTimeoutRef.current = null;
-    }
-  };
-
-  const handleDeleteMessage = (index) => {
-    const message = messages[index];
-    if (!message) {
-      return;
-    }
-
-    const confirmDelete = window.confirm("Delete this message?");
-    if (!confirmDelete) {
-      return;
-    }
-
-    const snapshot = {
-      chatsById: cloneChatsById(chatsById),
-      chatOrder: [...chatOrder],
-      activeChatId,
-    };
-
-    updateActiveChat((chat) => {
-      const nextMessages = chat.messages.filter((_, currentIndex) => currentIndex !== index);
-      return deriveChatMeta(chat, nextMessages);
-    });
-
-    setUndoSnapshot("Message deleted", snapshot);
-  };
-
-  const handleDeleteChat = (chatId) => {
-    const chatToDelete = chatsById[chatId];
-    if (!chatToDelete) {
-      return;
-    }
-
-    const confirmDelete = window.confirm(`Delete chat "${chatToDelete.title}"?`);
-    if (!confirmDelete) {
-      return;
-    }
-
-    const snapshot = {
-      chatsById: cloneChatsById(chatsById),
-      chatOrder: [...chatOrder],
-      activeChatId,
-    };
-
-    const nextChatsById = { ...chatsById };
-    delete nextChatsById[chatId];
-
-    const nextOrder = chatOrder.filter((id) => id !== chatId);
-
-    if (!nextOrder.length) {
-      const resetId = createChatId();
-      const resetChat = createConversation(resetId, "New Chat");
-      setChatsById({ [resetId]: resetChat });
-      setChatOrder([resetId]);
-      setActiveChatId(resetId);
-    } else {
-      setChatsById(nextChatsById);
-      setChatOrder(nextOrder);
+  const deleteChat = (chatId) => {
+    setChats((prev) => {
+      const filtered = prev.filter((chat) => chat.id !== chatId);
+      
+      // If the deleted chat was active, switch to the first remaining chat
       if (chatId === activeChatId) {
-        setActiveChatId(nextOrder[0]);
+        if (filtered.length > 0) {
+          setActiveChatId(filtered[0].id);
+        } else {
+          // Create a new chat if all chats are deleted
+          const newChat = createChat();
+          setActiveChatId(newChat.id);
+          return [newChat];
+        }
       }
-    }
-
-    setDraft("");
+      
+      return filtered;
+    });
     setError("");
-    setUndoSnapshot("Chat deleted", snapshot);
   };
 
-  const handleSendMessage = async (question) => {
-    const trimmed = question.trim();
-    if (!trimmed || loading) {
+  const sendMessage = async (text, options = {}) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading || !activeChatId) {
       return;
     }
 
     setError("");
-    const userMessage = { role: "user", content: trimmed };
-    updateActiveChat((chat) => ({
-      ...chat,
-      title: chat.title === "New Chat" ? buildTitle(trimmed) : chat.title,
-      preview: buildPreview(trimmed),
-      messages: [...chat.messages, userMessage],
-      updatedAt: Date.now(),
-    }));
+    const currentChat = chats.find((chat) => chat.id === activeChatId);
+    if (!currentChat) {
+      return;
+    }
+
+    let nextMessagesForChat = options.historyMessages
+      ? [...options.historyMessages]
+      : [...currentChat.messages];
+
+    if (!options.skipUserMessage) {
+      const userMessage = createMessage("user", trimmed);
+      nextMessagesForChat = [...nextMessagesForChat, userMessage];
+
+      updateChatById(activeChatId, (chat) => ({
+        ...chat,
+        title: chat.title === "New Chat" ? buildTitle(trimmed) : chat.title,
+        messages: nextMessagesForChat,
+        updatedAt: Date.now(),
+      }));
+    }
+
+    const conversationMessages = nextMessagesForChat
+      .slice(-MAX_CONTEXT_MESSAGES)
+      .map((message) => ({
+        role: message.role,
+        content: message.content,
+      }));
 
     setLoading(true);
     setIsTyping(true);
 
     try {
-      const data = await askTutor(trimmed);
-      const assistantMessage = { role: "assistant", content: data.answer };
+      const data = await askTutor(conversationMessages);
+      const assistantMessage = createMessage("assistant", data.answer);
 
-      updateActiveChat((chat) => ({
+      updateChatById(activeChatId, (chat) => ({
         ...chat,
-        preview: buildPreview(data.answer),
         messages: [...chat.messages, assistantMessage],
         updatedAt: Date.now(),
       }));
-
-      speakText(data.answer);
+      setDraft("");
     } catch (apiError) {
       const fallbackMessage =
         apiError?.response?.data?.detail ||
@@ -383,118 +274,435 @@ function ChatPage() {
     }
   };
 
-  const chatSummaries = chatOrder
-    .map((id) => chatsById[id])
-    .filter(Boolean)
-    .map((chat) => ({
-      id: chat.id,
-      title: chat.title,
-      preview: chat.preview,
+  const handleRegenerate = async () => {
+    if (!activeChat || loading) {
+      return;
+    }
+
+    const lastUserMessage = [...activeChat.messages].reverse().find((message) => message.role === "user");
+    if (!lastUserMessage) {
+      return;
+    }
+
+    let updatedHistory = [];
+
+    updateChatById(activeChat.id, (chat) => {
+      const nextMessages = [...chat.messages];
+      if (nextMessages[nextMessages.length - 1]?.role === "assistant") {
+        nextMessages.pop();
+      }
+      updatedHistory = nextMessages;
+      return {
+        ...chat,
+        messages: nextMessages,
+        updatedAt: Date.now(),
+      };
+    });
+
+    await sendMessage(lastUserMessage.content, {
+      skipUserMessage: true,
+      historyMessages: updatedHistory,
+    });
+  };
+
+  const handleCopyMessage = async (content) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch {
+      // Ignore clipboard errors.
+    }
+  };
+
+  const handleVoiceInput = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError("Voice input is not supported in this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript || "";
+      setDraft((prev) => `${prev} ${transcript}`.trim());
+    };
+
+    recognition.onerror = () => {
+      setError("Voice input failed. Please try again.");
+    };
+
+    recognition.start();
+  };
+
+  const handleFileUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    setDraft((prev) => `${prev} [File attached: ${file.name}]`.trim());
+    event.target.value = "";
+  };
+
+  const handleSuggestionClick = (suggestion) => {
+    sendMessage(suggestion);
+  };
+
+  const toolPromptMap = {
+    "Resume Builder": "Create a professional software engineer resume tailored for freelance roles with strong impact bullet points.",
+    "Code Generator": "Generate a clean React + Tailwind pricing section component with accessible markup and reusable props.",
+  };
+
+  const handleToolSelect = (toolLabel) => {
+    setActiveTool(toolLabel);
+    const prompt = toolPromptMap[toolLabel];
+    if (!prompt) {
+      return;
+    }
+
+    setDraft(prompt);
+    sendMessage(prompt);
+  };
+
+  const handleToggleSidebar = () => {
+    const isDesktop = typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
+    if (isDesktop) {
+      setSidebarCollapsed((prev) => !prev);
+      return;
+    }
+    setMobileSidebarOpen((prev) => !prev);
+  };
+
+  const clearActiveChat = () => {
+    if (!activeChatId) {
+      return;
+    }
+
+    updateChatById(activeChatId, (chat) => ({
+      ...chat,
+      title: "New Chat",
+      messages: [],
+      updatedAt: Date.now(),
     }));
+    setError("");
+  };
+
+  const handleOpenNotifications = () => {
+    setNotificationsOpen((prev) => !prev);
+    setSettingsOpen(false);
+  };
+
+  const handleOpenSettings = () => {
+    setSettingsOpen((prev) => !prev);
+    setNotificationsOpen(false);
+  };
+
+  const chatList = useMemo(
+    () => [...chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)),
+    [chats]
+  );
+
+  const notifications = useMemo(
+    () =>
+      [...messages]
+        .filter((message) => message.role === "assistant")
+        .slice(-5)
+        .reverse()
+        .map((message) => ({
+          id: message.id,
+          content: message.content,
+          timestamp: message.timestamp,
+        })),
+    [messages]
+  );
+
+  const lastUserPrompt = [...messages].reverse().find((message) => message.role === "user")?.content || "";
+  const suggestedPrompts = modePromptMap[mode] || modePromptMap["Learn Mode"];
+
+  const smartSuggestions = useMemo(() => {
+    if (!lastUserPrompt) {
+      return [
+        "Generate a focused learning roadmap",
+        "Create a practical assignment",
+        "Turn this lesson into a freelance mini-project",
+      ];
+    }
+
+    const lower = lastUserPrompt.toLowerCase();
+    if (lower.includes("resume") || lower.includes("portfolio")) {
+      return [
+        "Improve resume bullet points",
+        "Create portfolio case study format",
+        "Draft client pitch for this skill",
+      ];
+    }
+
+    if (lower.includes("code") || lower.includes("bug") || lower.includes("react")) {
+      return [
+        "Request optimized code version",
+        "Ask for test cases",
+        "Generate interview follow-up questions",
+      ];
+    }
+
+    return [
+      "Ask for a step-by-step explanation",
+      "Create a quiz from this conversation",
+      "Map this topic to a paid freelance task",
+    ];
+  }, [lastUserPrompt]);
+
+  const learningTips = useMemo(() => {
+    const base = {
+      "Learn Mode": [
+        "Use active recall every 15 minutes.",
+        "Teach the topic back in your own words.",
+      ],
+      "Exam Mode": [
+        "Practice timed answers to improve speed.",
+        "Revise weak areas before attempting full mocks.",
+      ],
+      "Coding Mode": [
+        "Write edge cases before finalizing the solution.",
+        "Refactor once it works, then add comments.",
+      ],
+      "Freelance Mode": [
+        "Show outcomes, not just tasks, in your proposals.",
+        "Deliver one polished sample before pitching bigger work.",
+      ],
+    };
+
+    return base[mode] || base["Learn Mode"];
+  }, [mode]);
+
+  const freelanceTasks = useMemo(() => {
+    const completed = messages.filter((message) => message.role === "assistant").length;
+    const baseProgress = Math.min(88, 20 + completed * 8);
+
+    return [
+      {
+        title: "Design a landing copy for a tutoring startup",
+        difficulty: "Easy",
+        reward: "$25",
+        progress: Math.min(100, baseProgress),
+      },
+      {
+        title: "Build a React pricing section with CTA",
+        difficulty: "Medium",
+        reward: "$60",
+        progress: Math.min(100, baseProgress - 12),
+      },
+      {
+        title: "Create end-to-end onboarding workflow",
+        difficulty: "Hard",
+        reward: "$120",
+        progress: Math.min(100, baseProgress - 22),
+      },
+    ];
+  }, [messages]);
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-gradient-to-br from-[#FFF8E7] via-[#F3E4D7] to-[#EAD7C3] text-[#2E2E2E]">
-      <header className="bg-transparent px-3 pt-3 sm:px-5 sm:pt-4">
-        <div className="mx-auto flex w-full max-w-[1380px] items-center justify-between gap-3 rounded-2xl border border-[#E6CBA8]/80 bg-[#FFF8E7]/85 px-4 py-2.5 shadow-[0_12px_35px_rgba(89,29,29,0.08)] backdrop-blur-xl sm:px-5">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleToggleSidebar}
-              className="rounded-xl border border-[#E6CBA8] bg-[#FFF8E7] p-2 text-maroon transition hover:bg-[#f6e8d3]"
-              aria-label="Toggle sidebar"
-            >
-              <PanelLeft size={16} />
-            </button>
+    <div
+      className={`h-screen overflow-hidden transition-colors duration-300 ${
+        isDark
+          ? "bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100"
+          : "bg-gradient-to-br from-[#FFF8E7] via-[#F3E4D7] to-[#EAD7C3] text-[#2E2E2E]"
+      }`}
+    >
+      <div className="flex h-full flex-col overflow-hidden">
+        <Navbar
+          onToggleSidebar={handleToggleSidebar}
+          isDark={isDark}
+          onToggleTheme={() => setIsDark((prev) => !prev)}
+          onNotificationsClick={handleOpenNotifications}
+          onSettingsClick={handleOpenSettings}
+          notificationCount={notifications.length}
+        />
 
-            <Link to="/" className="group flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[#800000] shadow-md transition duration-200 group-hover:scale-105">
-                <img
-                  src="/logo.png"
-                  alt="Tutorix AI logo"
-                  className="h-full w-full scale-[2.35] object-cover"
-                />
-              </span>
-              <span className="text-[24px] font-bold leading-none text-maroon">Tutorix AI</span>
-            </Link>
+        {(notificationsOpen || settingsOpen) && (
+          <div className="pointer-events-none absolute right-3 top-16 z-40 w-[320px] sm:right-6">
+            {notificationsOpen && (
+              <section
+                className={`pointer-events-auto rounded-2xl border p-3 shadow-xl ${
+                  isDark ? "border-slate-700 bg-slate-900 text-slate-100" : "border-[#E7D8C4] bg-white text-[#2E2E2E]"
+                }`}
+              >
+                <h3 className={`mb-2 text-sm font-black ${isDark ? "text-slate-100" : "text-[#7B1E1E]"}`}>
+                  Notifications
+                </h3>
+                <div className="max-h-72 space-y-2 overflow-y-auto">
+                  {notifications.length === 0 ? (
+                    <p className={`text-sm ${isDark ? "text-slate-400" : "text-[#7A6A59]"}`}>
+                      No notifications yet.
+                    </p>
+                  ) : (
+                    notifications.map((item) => (
+                      <article
+                        key={item.id}
+                        className={`rounded-xl border px-3 py-2 ${
+                          isDark ? "border-slate-700 bg-slate-950" : "border-[#E7D8C4] bg-[#FFF9EF]"
+                        }`}
+                      >
+                        <p className="line-clamp-2 text-sm leading-6">{item.content}</p>
+                        <p className={`mt-1 text-xs ${isDark ? "text-slate-400" : "text-[#7A6A59]"}`}>
+                          {formatTime(item.timestamp)}
+                        </p>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </section>
+            )}
+
+            {settingsOpen && (
+              <section
+                className={`pointer-events-auto rounded-2xl border p-3 shadow-xl ${
+                  isDark ? "border-slate-700 bg-slate-900 text-slate-100" : "border-[#E7D8C4] bg-white text-[#2E2E2E]"
+                }`}
+              >
+                <h3 className={`mb-3 text-sm font-black ${isDark ? "text-slate-100" : "text-[#7B1E1E]"}`}>
+                  Settings
+                </h3>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between rounded-xl border px-3 py-2">
+                    <span className="text-sm font-semibold">Theme</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsDark((prev) => !prev)}
+                      className="rounded-lg bg-gradient-to-r from-[#7B1E1E] to-[#B64D2E] px-3 py-1.5 text-xs font-black text-white"
+                    >
+                      {isDark ? "Dark" : "Light"}
+                    </button>
+                  </div>
+
+                  <div className="rounded-xl border px-3 py-2">
+                    <label className="mb-1 block text-xs font-bold uppercase tracking-[0.18em]">Default Mode</label>
+                    <select
+                      value={mode}
+                      onChange={(event) => setMode(event.target.value)}
+                      className={`w-full rounded-lg border px-2 py-1.5 text-sm ${
+                        isDark ? "border-slate-700 bg-slate-950" : "border-[#E7D8C4] bg-white"
+                      }`}
+                    >
+                      {Object.keys(modePromptMap).map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={createNewChat}
+                    className="w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold transition hover:bg-[#F4E8D4]"
+                  >
+                    Start New Chat
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={clearActiveChat}
+                    className="w-full rounded-xl border border-red-300 px-3 py-2 text-left text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                  >
+                    Clear Active Chat
+                  </button>
+                </div>
+              </section>
+            )}
           </div>
+        )}
 
-          <nav className="hidden items-center gap-2 sm:flex">
-            <Link
-              to="/"
-              className="rounded-full px-4 py-2 text-sm font-semibold text-[#2E2E2E] transition hover:bg-[#f6e8d3] hover:text-[#800000]"
-            >
-              Home
-            </Link>
-            <Link
-              to="/chat"
-              className="inline-flex items-center gap-2 rounded-full bg-[#800000] px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-[#6d0000]"
-            >
-              Chat
-              <ChevronRight size={14} />
-            </Link>
-          </nav>
-        </div>
-      </header>
-
-      <div className="flex h-full min-h-0 flex-col overflow-hidden">
-
-        <div className="flex flex-1 overflow-hidden pt-2">
+        <div className="mx-auto flex h-[calc(100vh-4rem)] w-full max-w-[1600px] overflow-hidden">
           <Sidebar
-            chats={chatSummaries}
+            chats={chatList}
             activeChatId={activeChatId}
-            onSelectChat={handleSelectChat}
-            onNewChat={handleNewChat}
-            onDeleteChat={handleDeleteChat}
+            onSelectChat={selectChat}
+            onNewChat={createNewChat}
+            onDeleteChat={deleteChat}
             mobileOpen={mobileSidebarOpen}
-            collapsed={sidebarCollapsed}
             onClose={() => setMobileSidebarOpen(false)}
+            collapsed={sidebarCollapsed}
+            isDark={isDark}
           />
 
-          <main className="flex flex-1 flex-col overflow-hidden bg-transparent px-3 py-2.5 sm:px-4 sm:py-3">
-            <Header
-              title={activeChat?.title || "New Chat"}
-              subtitle="Ask anything. Voice input and voice output are available."
-            />
+          <main className="flex min-w-0 flex-1 overflow-hidden px-3 py-4 sm:px-5 lg:pl-5">
+            <div className="flex min-w-0 flex-1 overflow-hidden rounded-2xl border shadow-[0_20px_45px_rgba(0,0,0,0.06)]">
+              <div className={`flex min-w-0 flex-1 flex-col overflow-hidden ${isDark ? "border-slate-800 bg-slate-950" : "border-[#E7D8C4] bg-white/95"}`}>
+                <div className={`border-b px-4 py-3 ${isDark ? "border-slate-800 bg-slate-950" : "border-[#E7D8C4] bg-white/90"}`}>
+                  <p className={`text-xs font-black uppercase tracking-[0.24em] ${isDark ? "text-slate-400" : "text-[#7B1E1E]"}`}>
+                    {mode}
+                  </p>
+                  <h1 className="mt-1 text-2xl font-black tracking-tight">{activeChat?.title || "New Chat"}</h1>
+                  <p className={`mt-1 text-sm ${isDark ? "text-slate-400" : "text-[#6E5A48]"}`}>
+                    Professional tutoring workspace with persistent multi-chat history.
+                  </p>
+                </div>
 
-            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden rounded-xl bg-white shadow-md ring-1 ring-black/5 transition-all duration-300">
-              <ChatWindow
-                key={activeChatId || "new-chat"}
-                messages={messages}
-                isTyping={isTyping}
-                error={error}
-                bottomRef={bottomRef}
-                onDeleteMessage={handleDeleteMessage}
-              />
+                <ChatArea
+                  key={activeChatId || "new-chat"}
+                  messages={messages}
+                  isTyping={isTyping}
+                  error={error}
+                  onCopy={handleCopyMessage}
+                  onRegenerate={handleRegenerate}
+                  isDark={isDark}
+                />
 
-              <InputBox
-                value={draft}
-                onChange={setDraft}
-                onSend={handleSendMessage}
-                loading={loading}
-                voiceEnabled={voiceEnabled}
-                onToggleVoice={() => setVoiceEnabled((previous) => !previous)}
-                onSpeechStart={() => {}}
-                onSpeechEnd={() => {}}
-              />
+                <ChatInput
+                  draft={draft}
+                  onDraftChange={setDraft}
+                  onSend={sendMessage}
+                  loading={loading}
+                  mode={mode}
+                  onModeChange={setMode}
+                  suggestedPrompts={suggestedPrompts}
+                  onPromptClick={setDraft}
+                  onUpload={handleFileUpload}
+                  onVoiceInput={handleVoiceInput}
+                  isDark={isDark}
+                />
+              </div>
             </div>
           </main>
-        </div>
-      </div>
 
-      {undoState && (
-        <div className="pointer-events-none fixed bottom-5 left-1/2 z-50 -translate-x-1/2 px-4">
-          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-[#DDBFA0] bg-white px-4 py-2.5 text-sm shadow-lg ring-1 ring-black/5">
-            <span className="font-semibold text-[#2E2E2E]">{undoState.label}</span>
-            <button
-              type="button"
-              onClick={handleUndo}
-              className="rounded-full bg-[#800000] px-3 py-1 text-xs font-bold text-white transition hover:bg-[#660000]"
-            >
-              Undo
-            </button>
+          <div className="hidden h-full min-h-0 overflow-y-auto px-2 py-4 xl:flex">
+            <RightPanel
+              suggestions={smartSuggestions}
+              mode={mode}
+              learningTips={learningTips}
+              freelanceTasks={freelanceTasks}
+              activeTool={activeTool}
+              onToolSelect={handleToolSelect}
+              onSuggestionClick={handleSuggestionClick}
+              isDark={isDark}
+            />
           </div>
         </div>
-      )}
+
+        <div className="mx-auto w-full max-w-[1600px] overflow-y-auto px-3 pb-4 xl:hidden">
+          <RightPanel
+            suggestions={smartSuggestions}
+            mode={mode}
+            learningTips={learningTips}
+            freelanceTasks={freelanceTasks}
+            activeTool={activeTool}
+            onToolSelect={handleToolSelect}
+            onSuggestionClick={handleSuggestionClick}
+            isDark={isDark}
+          />
+        </div>
+      </div>
     </div>
   );
 }
