@@ -104,10 +104,10 @@ Copy-Item .env.example .env
 
 ```env
 GROQ_API_KEY=your_real_key_here
-GROQ_MODEL=llama-3.1-8b-instant
+GROQ_MODEL=openai/gpt-oss-20b
 ```
 
-Note: `llama3-8b-8192` is deprecated on Groq in this environment, so the app defaults to a currently supported model via `GROQ_MODEL`.
+Note: Set `GROQ_MODEL` to a model currently available to your Groq account. The example uses `openai/gpt-oss-20b`.
 
 6. Start backend:
 

@@ -55,7 +55,7 @@ class GroqService:
 
         try:
             response = self.client.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+                model=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
                 temperature=0.4,
                 messages=final_payload,
             )
